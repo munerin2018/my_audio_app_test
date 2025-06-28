@@ -222,61 +222,87 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
             else if (_thumbnailUrl != null)
               Column(
                 children: [
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      Image.network(
-                        _thumbnailUrl!,
-                        height: 180,
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) =>
-                        const Text("サムネイル読み込み失敗"),
-                      ),
-                      if (_isOverlayVisible)
-                        Container(
+                  GestureDetector(
+                    onTap: () {
+                      setState(() => _isOverlayVisible = true);
+                      Future.delayed(const Duration(seconds: 2), () {
+                        if (mounted) setState(() => _isOverlayVisible = false);
+                      });
+                    },
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Image.network(
+                          _thumbnailUrl!,
                           height: 180,
-                          color: Colors.black.withOpacity(0.4),
+                          width: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) =>
+                          const Text("サムネイル読み込み失敗"),
                         ),
-                      Positioned(
-                        left: 16,
-                        child: IconButton(
-                          icon: const Icon(Icons.replay_10,
-                              color: Colors.white, size: 36),
-                          onPressed: () => _seekBy(const Duration(seconds: -10)),
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _isLooping ? Icons.repeat_one : Icons.repeat,
-                          color: _isLooping ? Colors.blue : Colors.white,
-                        ),
-                        onPressed: () {
-                          setState(() => _isLooping = !_isLooping);
-                          _audioPlayer.setLoopMode(
-                            _isLooping ? LoopMode.one : LoopMode.off,
-                          );
-                        },
-                      ),
-                      IconButton(
-                        icon: Icon(
-                          _isPlaying
-                              ? Icons.pause_circle_filled
-                              : Icons.play_circle_filled,
-                          size: 64,
-                          color: Colors.white,
-                        ),
-                        onPressed: _togglePlayPause,
-                      ),
-                      Positioned(
-                        right: 16,
-                        child: IconButton(
-                          icon: const Icon(Icons.forward_10,
-                              color: Colors.white, size: 36),
-                          onPressed: () => _seekBy(const Duration(seconds: 10)),
-                        ),
-                      ),
-                    ],
+                        if (_isOverlayVisible)
+                          Container(
+                            height: 180,
+                            color: Colors.black.withOpacity(0.4),
+                          ),
+                        if (_isOverlayVisible) ...[
+                          Positioned(
+                            left: 16,
+                            child: IconButton(
+                              icon: const Icon(Icons.replay_10,
+                                  color: Colors.white, size: 36),
+                              onPressed: () => _seekBy(const Duration(seconds: -10)),
+                            ),
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              _isPlaying
+                                  ? Icons.pause_circle_filled
+                                  : Icons.play_circle_filled,
+                              size: 64,
+                              color: Colors.white,
+                            ),
+                            onPressed: _togglePlayPause,
+                          ),
+                          Positioned(
+                            right: 16,
+                            child: IconButton(
+                              icon: const Icon(Icons.forward_10,
+                                  color: Colors.white, size: 36),
+                              onPressed: () => _seekBy(const Duration(seconds: 10)),
+                            ),
+                          ),
+                          Positioned(
+                            bottom: 8,
+                            left: 16,
+                            child: IconButton(
+                              icon: Icon(
+                                Icons.shuffle,
+                                color: _isShuffling ? Colors.blue : Colors.white,
+                              ),
+                              onPressed: () =>
+                                  setState(() => _isShuffling = !_isShuffling),
+                            ),
+                          ),
+                          Positioned(
+                            bottom: 8,
+                            right: 16,
+                            child: IconButton(
+                              icon: Icon(
+                                _isLooping ? Icons.repeat_one : Icons.repeat,
+                                color: _isLooping ? Colors.blue : Colors.white,
+                              ),
+                              onPressed: () {
+                                setState(() => _isLooping = !_isLooping);
+                                _audioPlayer.setLoopMode(
+                                  _isLooping ? LoopMode.one : LoopMode.off,
+                                );
+                              },
+                            ),
+                          ),
+                        ]
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
                   if (_videoTitle != null) Text("再生中: $_videoTitle"),
@@ -302,14 +328,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      IconButton(
-                        icon: Icon(
-                          Icons.shuffle,
-                          color: _isShuffling ? Colors.blue : Colors.white,
-                        ),
-                        onPressed: () =>
-                            setState(() => _isShuffling = !_isShuffling),
-                      ),
                       IconButton(
                         icon: const Icon(Icons.skip_next),
                         onPressed: _playNext,
