@@ -14,14 +14,41 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _focusNode = FocusNode();
 
+  final List<String> _playlistUrls = [];
+  int _currentIndex = 0;
+
   bool _isLoading = false;
   bool _isPlaying = false;
   bool _isOverlayVisible = false;
+  bool _isLooping = false;
+  bool _isShuffling = false;
 
   String? _videoTitle;
   String? _thumbnailUrl;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode.addListener(() {
+      if (_focusNode.hasFocus) {
+        _urlController.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _urlController.text.length,
+        );
+      }
+    });
+    _urlController.addListener(() => setState(() {}));
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    _urlController.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   Future<void> _playAudio(String url) async {
     setState(() {
@@ -93,28 +120,23 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     });
   }
 
-  @override
-  void initState() {
-    super.initState();
-    _focusNode.addListener(() {
-      if (_focusNode.hasFocus) {
-        _urlController.selection = TextSelection(
-          baseOffset: 0,
-          extentOffset: _urlController.text.length,
-        );
+  void _playFromPlaylist(int index) {
+    if (_playlistUrls.isEmpty) return;
+
+    setState(() {
+      if (_isShuffling) {
+        _playlistUrls.shuffle();
       }
+      _currentIndex = index % _playlistUrls.length;
     });
-    _urlController.addListener(() {
-      setState(() {}); // for clear icon visibility
-    });
+
+    _playAudio(_playlistUrls[_currentIndex]);
   }
 
-  @override
-  void dispose() {
-    _audioPlayer.dispose();
-    _urlController.dispose();
-    _focusNode.dispose();
-    super.dispose();
+  void _playNext() {
+    if (_playlistUrls.length <= 1) return;
+    final nextIndex = (_currentIndex + 1) % _playlistUrls.length;
+    _playFromPlaylist(nextIndex);
   }
 
   String _formatDuration(Duration d) {
@@ -131,47 +153,70 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            GestureDetector(
-              onTap: () {
-                if (_urlController.text.isNotEmpty) {
-                  _urlController.selection = TextSelection(
-                    baseOffset: 0,
-                    extentOffset: _urlController.text.length,
-                  );
-                }
-              },
-              child: TextField(
-                controller: _urlController,
-                focusNode: _focusNode,
-                decoration: InputDecoration(
-                  labelText: 'YouTubeのURLを入力',
-                  border: const OutlineInputBorder(),
-                  suffixIcon: _urlController.text.isNotEmpty
-                      ? IconButton(
-                    icon: const Icon(Icons.clear),
+            TextField(
+              controller: _urlController,
+              focusNode: _focusNode,
+              decoration: InputDecoration(
+                labelText: 'YouTubeのURLを入力',
+                border: const OutlineInputBorder(),
+                suffixIcon: _urlController.text.isNotEmpty
+                    ? IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () => _urlController.clear(),
+                )
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
                     onPressed: () {
-                      _urlController.clear();
+                      final url = _urlController.text.trim();
+                      if (url.isNotEmpty) {
+                        setState(() => _playlistUrls.add(url));
+                        _urlController.clear();
+                      }
                     },
-                  )
-                      : null,
+                    icon: const Icon(Icons.playlist_add),
+                    label: const Text('プレイリストに追加'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    final url = _urlController.text.trim();
+                    if (url.isNotEmpty) {
+                      setState(() => _playlistUrls.add(url));
+                      _currentIndex = _playlistUrls.length - 1;
+                      _playAudio(url);
+                    }
+                  },
+                  icon: const Icon(Icons.search),
+                  label: const Text('再生'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _playlistUrls.length,
+                itemBuilder: (context, index) => ListTile(
+                  title: Text(_playlistUrls[index]),
+                  onTap: () {
+                    _currentIndex = index;
+                    _playFromPlaylist(index);
+                  },
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete),
+                    onPressed: () {
+                      setState(() => _playlistUrls.removeAt(index));
+                    },
+                  ),
                 ),
               ),
             ),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: () {
-                final url = _urlController.text.trim();
-                if (url.isNotEmpty) {
-                  _playAudio(url);
-                  _urlController.selection = TextSelection.collapsed(
-                    offset: _urlController.text.length,
-                  );
-                }
-              },
-              icon: const Icon(Icons.search),
-              label: const Text('検索して再生'),
-            ),
-            const SizedBox(height: 20),
             if (_isLoading)
               const CircularProgressIndicator()
             else if (_thumbnailUrl != null)
@@ -185,9 +230,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                         height: 180,
                         width: double.infinity,
                         fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
-                          return const Text("サムネイル読み込み失敗");
-                        },
+                        errorBuilder: (context, error, stackTrace) =>
+                        const Text("サムネイル読み込み失敗"),
                       ),
                       if (_isOverlayVisible)
                         Container(
@@ -201,6 +245,18 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                               color: Colors.white, size: 36),
                           onPressed: () => _seekBy(const Duration(seconds: -10)),
                         ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          _isLooping ? Icons.repeat_one : Icons.repeat,
+                          color: _isLooping ? Colors.blue : Colors.white,
+                        ),
+                        onPressed: () {
+                          setState(() => _isLooping = !_isLooping);
+                          _audioPlayer.setLoopMode(
+                            _isLooping ? LoopMode.one : LoopMode.off,
+                          );
+                        },
                       ),
                       IconButton(
                         icon: Icon(
@@ -241,6 +297,23 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                     children: [
                       Text(_formatDuration(_position)),
                       Text(_formatDuration(_duration)),
+                    ],
+                  ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          Icons.shuffle,
+                          color: _isShuffling ? Colors.blue : Colors.white,
+                        ),
+                        onPressed: () =>
+                            setState(() => _isShuffling = !_isShuffling),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.skip_next),
+                        onPressed: _playNext,
+                      ),
                     ],
                   ),
                 ],
