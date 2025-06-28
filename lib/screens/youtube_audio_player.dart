@@ -13,8 +13,11 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   final TextEditingController _urlController = TextEditingController();
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _focusNode = FocusNode();
+
   bool _isLoading = false;
   bool _isPlaying = false;
+  bool _isOverlayVisible = false;
+
   String? _videoTitle;
   String? _thumbnailUrl;
   Duration _duration = Duration.zero;
@@ -45,14 +48,10 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
           _isPlaying = true;
         });
 
-        // 音声の長さを取得
         _audioPlayer.durationStream.listen((d) {
-          if (d != null) {
-            setState(() => _duration = d);
-          }
+          if (d != null) setState(() => _duration = d);
         });
 
-        // 再生位置を追跡
         _audioPlayer.positionStream.listen((p) {
           setState(() => _position = p);
         });
@@ -68,10 +67,35 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     }
   }
 
+  void _togglePlayPause() {
+    if (_isPlaying) {
+      _audioPlayer.pause();
+    } else {
+      _audioPlayer.play();
+    }
+    setState(() {
+      _isPlaying = !_isPlaying;
+      _isOverlayVisible = true;
+    });
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _isOverlayVisible = false);
+    });
+  }
+
+  void _seekBy(Duration offset) async {
+    final target = _audioPlayer.position + offset;
+    final clampedMillis = target.inMilliseconds.clamp(0, _duration.inMilliseconds);
+    await _audioPlayer.seek(Duration(milliseconds: clampedMillis));
+
+    setState(() => _isOverlayVisible = true);
+    Future.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _isOverlayVisible = false);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
-
     _focusNode.addListener(() {
       if (_focusNode.hasFocus) {
         _urlController.selection = TextSelection(
@@ -80,9 +104,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         );
       }
     });
-
     _urlController.addListener(() {
-      setState(() {}); // 入力状態の変化に応じてUI更新（×ボタンの表示制御など）
+      setState(() {}); // for clear icon visibility
     });
   }
 
@@ -140,9 +163,9 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                 final url = _urlController.text.trim();
                 if (url.isNotEmpty) {
                   _playAudio(url);
-                  // 🔽 全選択解除（末尾にカーソル）
                   _urlController.selection = TextSelection.collapsed(
-                      offset: _urlController.text.length);
+                    offset: _urlController.text.length,
+                  );
                 }
               },
               icon: const Icon(Icons.search),
@@ -154,13 +177,50 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
             else if (_thumbnailUrl != null)
               Column(
                 children: [
-                  Image.network(
-                    _thumbnailUrl!,
-                    height: 180,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Text("サムネイル読み込み失敗");
-                    },
+                  Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Image.network(
+                        _thumbnailUrl!,
+                        height: 180,
+                        width: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Text("サムネイル読み込み失敗");
+                        },
+                      ),
+                      if (_isOverlayVisible)
+                        Container(
+                          height: 180,
+                          color: Colors.black.withOpacity(0.4),
+                        ),
+                      Positioned(
+                        left: 16,
+                        child: IconButton(
+                          icon: const Icon(Icons.replay_10,
+                              color: Colors.white, size: 36),
+                          onPressed: () => _seekBy(const Duration(seconds: -10)),
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          _isPlaying
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_filled,
+                          size: 64,
+                          color: Colors.white,
+                        ),
+                        onPressed: _togglePlayPause,
+                      ),
+                      Positioned(
+                        right: 16,
+                        child: IconButton(
+                          icon: const Icon(Icons.forward_10,
+                              color: Colors.white, size: 36),
+                          onPressed: () => _seekBy(const Duration(seconds: 10)),
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                   if (_videoTitle != null) Text("再生中: $_videoTitle"),
@@ -182,19 +242,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                       Text(_formatDuration(_position)),
                       Text(_formatDuration(_duration)),
                     ],
-                  ),
-                  IconButton(
-                    iconSize: 64,
-                    icon:
-                    Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                    onPressed: () {
-                      if (_isPlaying) {
-                        _audioPlayer.pause();
-                      } else {
-                        _audioPlayer.play();
-                      }
-                      setState(() => _isPlaying = !_isPlaying);
-                    },
                   ),
                 ],
               ),
