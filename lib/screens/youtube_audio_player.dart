@@ -14,7 +14,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _focusNode = FocusNode();
 
-  final List<String> _playlistUrls = [];
+  final List<Map<String, String>> _playlist = [];
   int _currentIndex = 0;
 
   bool _isLoading = false;
@@ -22,6 +22,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   bool _isOverlayVisible = false;
   bool _isLooping = false;
   bool _isShuffling = false;
+  bool _isPlaylistExpanded = false;
 
   String? _videoTitle;
   String? _thumbnailUrl;
@@ -50,7 +51,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     super.dispose();
   }
 
-  Future<void> _playAudio(String url) async {
+  Future<void> _playAudio(String url, {bool fromPlaylist = false}) async {
     setState(() {
       _isLoading = true;
       _videoTitle = null;
@@ -74,6 +75,15 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
           _thumbnailUrl = video.thumbnails.highResUrl;
           _isPlaying = true;
         });
+
+        if (!fromPlaylist) {
+          _playlist.add({
+            'url': url,
+            'title': video.title,
+            'thumbnail': video.thumbnails.lowResUrl,
+          });
+          _currentIndex = _playlist.length - 1;
+        }
 
         _audioPlayer.durationStream.listen((d) {
           if (d != null) setState(() => _duration = d);
@@ -121,21 +131,21 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   }
 
   void _playFromPlaylist(int index) {
-    if (_playlistUrls.isEmpty) return;
+    if (_playlist.isEmpty) return;
 
     setState(() {
       if (_isShuffling) {
-        _playlistUrls.shuffle();
+        _playlist.shuffle();
       }
-      _currentIndex = index % _playlistUrls.length;
+      _currentIndex = index % _playlist.length;
     });
 
-    _playAudio(_playlistUrls[_currentIndex]);
+    _playAudio(_playlist[_currentIndex]['url']!, fromPlaylist: true);
   }
 
   void _playNext() {
-    if (_playlistUrls.length <= 1) return;
-    final nextIndex = (_currentIndex + 1) % _playlistUrls.length;
+    if (_playlist.length <= 1) return;
+    final nextIndex = (_currentIndex + 1) % _playlist.length;
     _playFromPlaylist(nextIndex);
   }
 
@@ -175,48 +185,46 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                     onPressed: () {
                       final url = _urlController.text.trim();
                       if (url.isNotEmpty) {
-                        setState(() => _playlistUrls.add(url));
+                        _playAudio(url);
                         _urlController.clear();
                       }
                     },
-                    icon: const Icon(Icons.playlist_add),
-                    label: const Text('プレイリストに追加'),
+                    icon: const Icon(Icons.play_arrow),
+                    label: const Text('再生'),
                   ),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
                   onPressed: () {
-                    final url = _urlController.text.trim();
-                    if (url.isNotEmpty) {
-                      setState(() => _playlistUrls.add(url));
-                      _currentIndex = _playlistUrls.length - 1;
-                      _playAudio(url);
-                    }
+                    setState(() => _isPlaylistExpanded = !_isPlaylistExpanded);
                   },
-                  icon: const Icon(Icons.search),
-                  label: const Text('再生'),
+                  icon: const Icon(Icons.playlist_play),
+                  label: const Text('プレイリスト'),
                 ),
               ],
             ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _playlistUrls.length,
-                itemBuilder: (context, index) => ListTile(
-                  title: Text(_playlistUrls[index]),
-                  onTap: () {
-                    _currentIndex = index;
-                    _playFromPlaylist(index);
-                  },
-                  trailing: IconButton(
-                    icon: const Icon(Icons.delete),
-                    onPressed: () {
-                      setState(() => _playlistUrls.removeAt(index));
-                    },
+            if (_isPlaylistExpanded)
+              Expanded(
+                child: ListView.builder(
+                  itemCount: _playlist.length,
+                  itemBuilder: (context, index) => ListTile(
+                    leading: Image.network(
+                      _playlist[index]['thumbnail'] ?? '',
+                      width: 50,
+                      height: 50,
+                      fit: BoxFit.cover,
+                    ),
+                    title: Text(_playlist[index]['title'] ?? ''),
+                    onTap: () => _playFromPlaylist(index),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete),
+                      onPressed: () {
+                        setState(() => _playlist.removeAt(index));
+                      },
+                    ),
                   ),
                 ),
               ),
-            ),
             if (_isLoading)
               const CircularProgressIndicator()
             else if (_thumbnailUrl != null)
