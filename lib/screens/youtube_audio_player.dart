@@ -51,11 +51,9 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     super.dispose();
   }
 
-  Future<void> _playAudio(String url, {bool fromPlaylist = false}) async {
+  Future<void> _playAudio(String url) async {
     setState(() {
       _isLoading = true;
-      _videoTitle = null;
-      _thumbnailUrl = null;
     });
 
     try {
@@ -66,8 +64,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
       final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
 
       if (audioStreamInfo != null) {
-        final audioUrl = audioStreamInfo.url.toString();
-        await _audioPlayer.setUrl(audioUrl);
+        await _audioPlayer.setUrl(audioStreamInfo.url.toString());
+        await _audioPlayer.load();
         await _audioPlayer.play();
 
         setState(() {
@@ -76,15 +74,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
           _isPlaying = true;
         });
 
-        if (!fromPlaylist) {
-          _playlist.add({
-            'url': url,
-            'title': video.title,
-            'thumbnail': video.thumbnails.lowResUrl,
-          });
-          _currentIndex = _playlist.length - 1;
-        }
-
         _audioPlayer.durationStream.listen((d) {
           if (d != null) setState(() => _duration = d);
         });
@@ -92,8 +81,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         _audioPlayer.positionStream.listen((p) {
           setState(() => _position = p);
         });
-      } else {
-        print("音声ストリームが見つかりません");
       }
 
       yt.close();
@@ -121,26 +108,27 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
   void _seekBy(Duration offset) async {
     final target = _audioPlayer.position + offset;
-    final clampedMillis = target.inMilliseconds.clamp(0, _duration.inMilliseconds);
-    await _audioPlayer.seek(Duration(milliseconds: clampedMillis));
-
+    final clamped = Duration(milliseconds: target.inMilliseconds.clamp(0, _duration.inMilliseconds));
+    await _audioPlayer.seek(clamped);
     setState(() => _isOverlayVisible = true);
     Future.delayed(const Duration(seconds: 2), () {
       if (mounted) setState(() => _isOverlayVisible = false);
     });
   }
 
+  void _showOverlayTemporarily() {
+    setState(() => _isOverlayVisible = true);
+    Future.delayed(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _isOverlayVisible = false);
+    });
+  }
+
+
   void _playFromPlaylist(int index) {
     if (_playlist.isEmpty) return;
-
-    setState(() {
-      if (_isShuffling) {
-        _playlist.shuffle();
-      }
-      _currentIndex = index % _playlist.length;
-    });
-
-    _playAudio(_playlist[_currentIndex]['url']!, fromPlaylist: true);
+    if (_isShuffling) _playlist.shuffle();
+    _currentIndex = index % _playlist.length;
+    _playAudio(_playlist[_currentIndex]['url']!);
   }
 
   void _playNext() {
@@ -149,10 +137,62 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     _playFromPlaylist(nextIndex);
   }
 
+  void _playPrevious() {
+    if (_playlist.length <= 1) return;
+    final prevIndex = (_currentIndex - 1 + _playlist.length) % _playlist.length;
+    _playFromPlaylist(prevIndex);
+  }
+
   String _formatDuration(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
+  }
+  Widget _buildThumbnailArea() {
+    if (_thumbnailUrl == null) return const SizedBox(height: 200);
+    return GestureDetector(
+      onTap: _showOverlayTemporarily,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          ColorFiltered(
+            colorFilter: _isOverlayVisible
+                ? ColorFilter.mode(Colors.black.withOpacity(0.5), BlendMode.darken)
+                : const ColorFilter.mode(Colors.transparent, BlendMode.multiply),
+            child: Image.network(
+              _thumbnailUrl!,
+              height: 200,
+              width: double.infinity,
+              fit: BoxFit.cover,
+            ),
+          ),
+          if (_isOverlayVisible)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.replay_10, color: Colors.white, size: 36),
+                  onPressed: () => _seekBy(const Duration(seconds: -10)),
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  icon: Icon(
+                    _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                    size: 48,
+                    color: Colors.white,
+                  ),
+                  onPressed: _togglePlayPause,
+                ),
+                const SizedBox(width: 12),
+                IconButton(
+                  icon: const Icon(Icons.forward_10, color: Colors.white, size: 36),
+                  onPressed: () => _seekBy(const Duration(seconds: 10)),
+                ),
+              ],
+            )
+        ],
+      ),
+    );
   }
 
   @override
@@ -163,58 +203,176 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            TextField(
-              controller: _urlController,
-              focusNode: _focusNode,
-              decoration: InputDecoration(
-                labelText: 'YouTubeのURLを入力',
-                border: const OutlineInputBorder(),
-                suffixIcon: _urlController.text.isNotEmpty
-                    ? IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () => _urlController.clear(),
-                )
-                    : null,
-              ),
-            ),
-            const SizedBox(height: 8),
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      final url = _urlController.text.trim();
-                      if (url.isNotEmpty) {
-                        _playAudio(url);
-                        _urlController.clear();
-                      }
-                    },
-                    icon: const Icon(Icons.play_arrow),
-                    label: const Text('再生'),
+                  child: TextField(
+                    controller: _urlController,
+                    focusNode: _focusNode,
+                    decoration: const InputDecoration(
+                      labelText: 'YouTubeのURLを入力',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
-                  onPressed: () {
-                    setState(() => _isPlaylistExpanded = !_isPlaylistExpanded);
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('検索'),
+                  onPressed: () async {
+                    final url = _urlController.text.trim();
+                    if (url.isEmpty) return;
+
+                    final yt = YoutubeExplode();
+                    try {
+                      final video = await yt.videos.get(VideoId(url));
+                      final title = video.title;
+                      final thumb = video.thumbnails.mediumResUrl;
+                      setState(() {
+                        _playlist.add({
+                          'title': title,
+                          'url': url,
+                          'thumbnailUrl': thumb,
+                        });
+                        _currentIndex = _playlist.length - 1;
+                      });
+                      _playAudio(url);
+                    } catch (e) {
+                      print('再生失敗: $e');
+                    } finally {
+                      yt.close();
+                    }
                   },
-                  icon: const Icon(Icons.playlist_play),
-                  label: const Text('プレイリスト'),
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.clear),
+                  onPressed: () => _urlController.clear(),
                 ),
               ],
             ),
-            if (_isPlaylistExpanded)
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _playlist.length,
-                  itemBuilder: (context, index) => ListTile(
-                    leading: Image.network(
-                      _playlist[index]['thumbnail'] ?? '',
-                      width: 50,
-                      height: 50,
-                      fit: BoxFit.cover,
+
+            const SizedBox(height: 10),
+
+            if (_thumbnailUrl != null)
+              Stack(
+                alignment: Alignment.center,
+                children: [
+                  Image.network(
+                    _thumbnailUrl!,
+                    height: 200,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) =>
+                    const Text("サムネイル読み込み失敗"),
+                  ),
+                  Positioned(
+                    left: 8,
+                    child: IconButton(
+                      icon: const Icon(Icons.skip_previous, size: 36, color: Colors.white),
+                      onPressed: _playPrevious,
                     ),
-                    title: Text(_playlist[index]['title'] ?? ''),
+                  ),
+                  Positioned(
+                    right: 8,
+                    child: IconButton(
+                      icon: const Icon(Icons.skip_next, size: 36, color: Colors.white),
+                      onPressed: _playNext,
+                    ),
+                  ),
+                  Positioned(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.replay_10, color: Colors.white, size: 32),
+                          onPressed: () => _seekBy(const Duration(seconds: -10)),
+                        ),
+                        const SizedBox(width: 12),
+                        IconButton(
+                          icon: Icon(
+                            _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                            size: 48,
+                            color: Colors.white,
+                          ),
+                          onPressed: _togglePlayPause,
+                        ),
+                        const SizedBox(width: 12),
+                        IconButton(
+                          icon: const Icon(Icons.forward_10, color: Colors.white, size: 32),
+                          onPressed: () => _seekBy(const Duration(seconds: 10)),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+
+            const SizedBox(height: 8),
+            if (_videoTitle != null)
+              Text("🎵 $_videoTitle", style: const TextStyle(fontWeight: FontWeight.bold)),
+            Slider(
+              min: 0,
+              max: _duration.inSeconds.toDouble(),
+              value: _position.inSeconds.clamp(0, _duration.inSeconds).toDouble(),
+              onChanged: (value) async {
+                final newPosition = Duration(seconds: value.toInt());
+                await _audioPlayer.seek(newPosition);
+              },
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(_formatDuration(_position)),
+                Text(_formatDuration(_duration)),
+              ],
+            ),
+            if (_thumbnailUrl == null)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.skip_previous, size: 36),
+                    onPressed: _playPrevious,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.replay_10),
+                    onPressed: () => _seekBy(const Duration(seconds: -10)),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
+                      size: 48,
+                    ),
+                    onPressed: _togglePlayPause,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.forward_10),
+                    onPressed: () => _seekBy(const Duration(seconds: 10)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.skip_next, size: 36),
+                    onPressed: _playNext,
+                  ),
+                ],
+              ),
+
+
+            const Divider(height: 20),
+
+            if (_playlist.isNotEmpty)
+              ExpansionTile(
+                title: const Text("🎵 プレイリスト"),
+                initiallyExpanded: _isPlaylistExpanded,
+                onExpansionChanged: (expanded) {
+                  setState(() => _isPlaylistExpanded = expanded);
+                },
+                children: _playlist.asMap().entries.map((entry) {
+                  final index = entry.key;
+                  final item = entry.value;
+                  return ListTile(
+                    leading: Image.network(item['thumbnailUrl'] ?? "", width: 60),
+                    title: Text(item['title'] ?? ''),
                     onTap: () => _playFromPlaylist(index),
                     trailing: IconButton(
                       icon: const Icon(Icons.delete),
@@ -222,127 +380,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                         setState(() => _playlist.removeAt(index));
                       },
                     ),
-                  ),
-                ),
-              ),
-            if (_isLoading)
-              const CircularProgressIndicator()
-            else if (_thumbnailUrl != null)
-              Column(
-                children: [
-                  GestureDetector(
-                    onTap: () {
-                      setState(() => _isOverlayVisible = true);
-                      Future.delayed(const Duration(seconds: 2), () {
-                        if (mounted) setState(() => _isOverlayVisible = false);
-                      });
-                    },
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        Image.network(
-                          _thumbnailUrl!,
-                          height: 180,
-                          width: double.infinity,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) =>
-                          const Text("サムネイル読み込み失敗"),
-                        ),
-                        if (_isOverlayVisible)
-                          Container(
-                            height: 180,
-                            color: Colors.black.withOpacity(0.4),
-                          ),
-                        if (_isOverlayVisible) ...[
-                          Positioned(
-                            left: 16,
-                            child: IconButton(
-                              icon: const Icon(Icons.replay_10,
-                                  color: Colors.white, size: 36),
-                              onPressed: () => _seekBy(const Duration(seconds: -10)),
-                            ),
-                          ),
-                          IconButton(
-                            icon: Icon(
-                              _isPlaying
-                                  ? Icons.pause_circle_filled
-                                  : Icons.play_circle_filled,
-                              size: 64,
-                              color: Colors.white,
-                            ),
-                            onPressed: _togglePlayPause,
-                          ),
-                          Positioned(
-                            right: 16,
-                            child: IconButton(
-                              icon: const Icon(Icons.forward_10,
-                                  color: Colors.white, size: 36),
-                              onPressed: () => _seekBy(const Duration(seconds: 10)),
-                            ),
-                          ),
-                          Positioned(
-                            bottom: 8,
-                            left: 16,
-                            child: IconButton(
-                              icon: Icon(
-                                Icons.shuffle,
-                                color: _isShuffling ? Colors.blue : Colors.white,
-                              ),
-                              onPressed: () =>
-                                  setState(() => _isShuffling = !_isShuffling),
-                            ),
-                          ),
-                          Positioned(
-                            bottom: 8,
-                            right: 16,
-                            child: IconButton(
-                              icon: Icon(
-                                _isLooping ? Icons.repeat_one : Icons.repeat,
-                                color: _isLooping ? Colors.blue : Colors.white,
-                              ),
-                              onPressed: () {
-                                setState(() => _isLooping = !_isLooping);
-                                _audioPlayer.setLoopMode(
-                                  _isLooping ? LoopMode.one : LoopMode.off,
-                                );
-                              },
-                            ),
-                          ),
-                        ]
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  if (_videoTitle != null) Text("再生中: $_videoTitle"),
-                  const SizedBox(height: 8),
-                  Slider(
-                    min: 0,
-                    max: _duration.inSeconds.toDouble(),
-                    value: _position.inSeconds
-                        .clamp(0, _duration.inSeconds)
-                        .toDouble(),
-                    onChanged: (value) async {
-                      final newPosition = Duration(seconds: value.toInt());
-                      await _audioPlayer.seek(newPosition);
-                    },
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(_formatDuration(_position)),
-                      Text(_formatDuration(_duration)),
-                    ],
-                  ),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.skip_next),
-                        onPressed: _playNext,
-                      ),
-                    ],
-                  ),
-                ],
+                  );
+                }).toList(),
               ),
           ],
         ),
