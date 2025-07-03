@@ -1,6 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'package:dio/dio.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'dart:io';
+
 
 class YouTubeAudioPlayer extends StatefulWidget {
   const YouTubeAudioPlayer({super.key});
@@ -55,6 +60,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     setState(() {
       _isLoading = true;
     });
+
 
     try {
       final yt = YoutubeExplode();
@@ -143,6 +149,72 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     _playFromPlaylist(prevIndex);
   }
 
+  Future<String> _getDownloadPath() async {
+    if (Platform.isAndroid) {
+      final directory = Directory('/storage/emulated/0/Download');
+      if (await directory.exists()) {
+        return directory.path;
+      } else {
+        await directory.create(recursive: true);
+        return directory.path;
+      }
+    } else {
+      final dir = await getDownloadsDirectory(); // macOS / Windows 用
+      return dir?.path ?? '';
+    }
+  }
+
+
+  Future<void> _downloadAudio(String url, String filename) async {
+    try {
+      // ストレージ権限（Android 13以下）
+      final status = await Permission.storage.request();
+      if (!status.isGranted) {
+        print("ストレージのアクセスが許可されていません");
+        return;
+      }
+
+      final path = await _getDownloadPath();
+      final filePath = '$path/$filename.webm';
+
+      final dio = Dio();
+      await dio.download(
+        url,
+        filePath,
+        onReceiveProgress: (received, total) {
+          if (total != -1) {
+            print("進行状況: ${(received / total * 100).toStringAsFixed(0)}%");
+          }
+        },
+      );
+
+      print("保存完了: $filePath");
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("保存しました: $filename")));
+    } catch (e) {
+      print("保存エラー: $e");
+    }
+
+  }
+
+  Future<void> _fetchAndDownloadAudio(String videoUrl, String title) async {
+    try {
+      final yt = YoutubeExplode();
+      final videoId = VideoId(videoUrl);
+      final manifest = await yt.videos.streamsClient.getManifest(videoId);
+      final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
+
+      if (audioStreamInfo != null) {
+        final downloadUrl = audioStreamInfo.url.toString();
+        await _downloadAudio(downloadUrl, title);
+      }
+
+      yt.close();
+    } catch (e) {
+      print("音声取得失敗: $e");
+    }
+  }
+
+
   String _formatDuration(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
@@ -190,6 +262,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                 ),
               ],
             )
+
         ],
       ),
     );
@@ -372,7 +445,25 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   final item = entry.value;
                   return ListTile(
                     leading: Image.network(item['thumbnailUrl'] ?? "", width: 60),
-                    title: Text(item['title'] ?? ''),
+                    title: Row(
+                      children: [
+                        Expanded(child: Text(item['title'] ?? '')),
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.download, size: 18),
+                          label: const Text("保存", style: TextStyle(fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          ),
+                          onPressed: () {
+                            final title = item['title'] ?? 'download';
+                            final url = item['url'];
+                            if (url != null) {
+                              _fetchAndDownloadAudio(url, title);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
                     onTap: () => _playFromPlaylist(index),
                     trailing: IconButton(
                       icon: const Icon(Icons.delete),
@@ -381,8 +472,10 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                       },
                     ),
                   );
+
                 }).toList(),
               ),
+
           ],
         ),
       ),
