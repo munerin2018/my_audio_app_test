@@ -5,6 +5,7 @@ import 'screens/local_file_player.dart';
 import 'screens/youtube_audio_player.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const MyApp());
 }
 

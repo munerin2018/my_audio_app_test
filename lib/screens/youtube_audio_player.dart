@@ -5,6 +5,9 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
+import 'package:device_info_plus/device_info_plus.dart';
+
+
 
 
 class YouTubeAudioPlayer extends StatefulWidget {
@@ -164,13 +167,34 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     }
   }
 
+  Future<bool> _requestStoragePermission() async {
+    if (Platform.isAndroid) {
+      final deviceInfo = DeviceInfoPlugin();
+      final androidInfo = await deviceInfo.androidInfo;
+      final sdkInt = androidInfo.version.sdkInt;
+
+      if (sdkInt >= 33) {
+        var audio = await Permission.audio.request();
+        return audio.isGranted;
+      } else {
+        var storage = await Permission.storage.request();
+        return storage.isGranted;
+      }
+    }
+    return true; // iOSや他のプラットフォーム
+  }
+
+
+
 
   Future<void> _downloadAudio(String url, String filename) async {
     try {
-      // ストレージ権限（Android 13以下）
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
+      final granted = await _requestStoragePermission();
+      if (!granted) {
         print("ストレージのアクセスが許可されていません");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("保存にはストレージ権限が必要です")),
+        );
         return;
       }
 
@@ -193,8 +217,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     } catch (e) {
       print("保存エラー: $e");
     }
-
   }
+
 
   Future<void> _fetchAndDownloadAudio(String videoUrl, String title) async {
     try {
