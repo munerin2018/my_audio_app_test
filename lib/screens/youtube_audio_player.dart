@@ -187,7 +187,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
 
 
-  Future<void> _downloadAudio(String url, String filename) async {
+  Future<void> _downloadAudio(String url, String filename, String? thumbnailUrl) async {
     try {
       final granted = await _requestStoragePermission();
       if (!granted) {
@@ -200,6 +200,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
       final path = await _getDownloadPath();
       final filePath = '$path/$filename.webm';
+      final thumbPath = '$path/$filename.jpg';
 
       final dio = Dio();
       await dio.download(
@@ -212,6 +213,19 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         },
       );
 
+      // サムネイル画像のダウンロード（もしURLが存在すれば）
+      if (thumbnailUrl != null && thumbnailUrl.isNotEmpty) {
+        await dio.download(
+          thumbnailUrl,
+          thumbPath,
+          onReceiveProgress: (received, total) {
+            if (total != -1) {
+              print("サムネイル進行状況: ${(received / total * 100).toStringAsFixed(0)}%");
+            }
+          },
+        );
+      }
+
       print("保存完了: $filePath");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("保存しました: $filename")));
     } catch (e) {
@@ -220,7 +234,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   }
 
 
-  Future<void> _fetchAndDownloadAudio(String videoUrl, String title) async {
+  Future<void> _fetchAndDownloadAudio(String videoUrl, String title, {String? thumbnailUrl}) async {
     try {
       final yt = YoutubeExplode();
       final videoId = VideoId(videoUrl);
@@ -229,7 +243,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
       if (audioStreamInfo != null) {
         final downloadUrl = audioStreamInfo.url.toString();
-        await _downloadAudio(downloadUrl, title);
+        await _downloadAudio(downloadUrl, title, thumbnailUrl);
       }
 
       yt.close();
@@ -481,8 +495,9 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                           onPressed: () {
                             final title = item['title'] ?? 'download';
                             final url = item['url'];
+                            final thumb = item['thumbnailUrl'];
                             if (url != null) {
-                              _fetchAndDownloadAudio(url, title);
+                              _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
                             }
                           },
                         ),
