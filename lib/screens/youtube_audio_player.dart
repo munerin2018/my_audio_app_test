@@ -478,42 +478,50 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                 onExpansionChanged: (expanded) {
                   setState(() => _isPlaylistExpanded = expanded);
                 },
-                children: _playlist.asMap().entries.map((entry) {
-                  final index = entry.key;
-                  final item = entry.value;
-                  return ListTile(
-                    leading: Image.network(item['thumbnailUrl'] ?? "", width: 60),
-                    title: Row(
-                      children: [
-                        Expanded(child: Text(item['title'] ?? '')),
-                        ElevatedButton.icon(
-                          icon: const Icon(Icons.download, size: 18),
-                          label: const Text("保存", style: TextStyle(fontSize: 12)),
-                          style: ElevatedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                children: [
+                  SizedBox(
+                    height: 200, // 高さを必要に応じて調整
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: _playlist.length,
+                      itemBuilder: (context, index) {
+                        final item = _playlist[index];
+                        return ListTile(
+                          leading: Image.network(item['thumbnailUrl'] ?? "", width: 60),
+                          title: Row(
+                            children: [
+                              Expanded(child: Text(item['title'] ?? '')),
+                              ElevatedButton.icon(
+                                icon: const Icon(Icons.download, size: 18),
+                                label: const Text("保存", style: TextStyle(fontSize: 12)),
+                                style: ElevatedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                ),
+                                onPressed: () {
+                                  final title = item['title'] ?? 'download';
+                                  final url = item['url'];
+                                  final thumb = item['thumbnailUrl'];
+                                  if (url != null) {
+                                    _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
+                                  }
+                                },
+                              ),
+                            ],
                           ),
-                          onPressed: () {
-                            final title = item['title'] ?? 'download';
-                            final url = item['url'];
-                            final thumb = item['thumbnailUrl'];
-                            if (url != null) {
-                              _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                    onTap: () => _playFromPlaylist(index),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete),
-                      onPressed: () {
-                        setState(() => _playlist.removeAt(index));
+                          onTap: () => _playFromPlaylist(index),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete),
+                            onPressed: () {
+                              setState(() => _playlist.removeAt(index));
+                            },
+                          ),
+                        );
                       },
                     ),
-                  );
-
-                }).toList(),
+                  ),
+                ],
               ),
+
 
           ],
         ),
