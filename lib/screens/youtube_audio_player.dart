@@ -7,9 +7,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 
-
-
-
 class YouTubeAudioPlayer extends StatefulWidget {
   const YouTubeAudioPlayer({super.key});
 
@@ -24,7 +21,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
   final List<Map<String, String>> _playlist = [];
   int _currentIndex = 0;
-  double _downloadProgress = 0.0;
 
   bool _isLoading = false;
   bool _isPlaying = false;
@@ -32,12 +28,17 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   bool _isLooping = false;
   bool _isShuffling = false;
   bool _isPlaylistExpanded = false;
-  bool _isDownloading = false;
 
   String? _videoTitle;
   String? _thumbnailUrl;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
+
+  // Download state variables
+  bool _isDownloading = false;
+  double _downloadProgress = 0.0;
+  bool _downloadSuccess = false;
+  bool _downloadFailed = false;
 
   @override
   void initState() {
@@ -65,7 +66,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     setState(() {
       _isLoading = true;
     });
-
 
     try {
       final yt = YoutubeExplode();
@@ -134,7 +134,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     });
   }
 
-
   void _playFromPlaylist(int index) {
     if (_playlist.isEmpty) return;
     if (_isShuffling) _playlist.shuffle();
@@ -186,9 +185,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     return true; // iOSや他のプラットフォーム
   }
 
-
-
-
   Future<void> _downloadAudio(String url, String filename, String? thumbnailUrl) async {
     try {
       final granted = await _requestStoragePermission();
@@ -200,12 +196,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         return;
       }
 
-      setState(() {
-        _isDownloading = true;
-        _downloadProgress = 0.0;
-      });
-
-
       final path = await _getDownloadPath();
       final filePath = '$path/$filename.webm';
       final thumbPath = '$path/$filename.jpg';
@@ -216,8 +206,12 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         filePath,
         onReceiveProgress: (received, total) {
           if (total != -1) {
-            final progress = received / total;
-            setState(() => _downloadProgress = progress);
+            setState(() {
+              _downloadProgress = received / total;
+              _isDownloading = true;
+              _downloadSuccess = false;
+              _downloadFailed = false;
+            });
           }
         },
       );
@@ -229,22 +223,25 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
           thumbPath,
           onReceiveProgress: (received, total) {
             if (total != -1) {
-              final progress = received / total;
-              setState(() => _downloadProgress = progress);
+              print("サムネイル進行状況: ${(received / total * 100).toStringAsFixed(0)}%");
             }
           },
         );
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("保存しました: $filename")),
-      );
-    } catch (e) {
-      print("保存エラー: $e");
-    } finally {
+      print("保存完了: $filePath");
       setState(() {
         _isDownloading = false;
-        _downloadProgress = 0.0;
+        _downloadSuccess = true;
+        _downloadFailed = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("保存しました: $filename")));
+    } catch (e) {
+      print("保存エラー: $e");
+      setState(() {
+        _isDownloading = false;
+        _downloadSuccess = false;
+        _downloadFailed = true;
       });
     }
   }
@@ -267,62 +264,60 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     }
   }
 
-
   String _formatDuration(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
-  Widget _buildThumbnailArea() {
-    if (_thumbnailUrl == null) return const SizedBox(height: 200);
-    return GestureDetector(
-      onTap: _showOverlayTemporarily,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          ColorFiltered(
-            colorFilter: _isOverlayVisible
-                ? ColorFilter.mode(Colors.black.withOpacity(0.5), BlendMode.darken)
-                : const ColorFilter.mode(Colors.transparent, BlendMode.multiply),
-            child: Image.network(
-              _thumbnailUrl!,
-              height: 200,
-              width: double.infinity,
-              fit: BoxFit.cover,
-            ),
-          ),
-          if (_isOverlayVisible)
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.replay_10, color: Colors.white, size: 36),
-                  onPressed: () => _seekBy(const Duration(seconds: -10)),
-                ),
-                const SizedBox(width: 12),
-                IconButton(
-                  icon: Icon(
-                    _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                    size: 48,
-                    color: Colors.white,
-                  ),
-                  onPressed: _togglePlayPause,
-                ),
-                const SizedBox(width: 12),
-                IconButton(
-                  icon: const Icon(Icons.forward_10, color: Colors.white, size: 36),
-                  onPressed: () => _seekBy(const Duration(seconds: 10)),
-                ),
-              ],
-            )
 
-        ],
-      ),
-    );
+  Widget _buildDownloadButton(int index) {
+    final item = _playlist[index];
+    final title = item['title'] ?? 'download';
+    final url = item['url'];
+    final thumb = item['thumbnailUrl'];
+
+    if (_isDownloading && index == _currentIndex) {
+      return Center(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            CircularProgressIndicator(
+              value: _downloadProgress,
+              backgroundColor: Colors.grey[300],
+              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+            ),
+            if (_downloadSuccess)
+              const Icon(Icons.check_circle, color: Colors.green),
+            if (_downloadFailed)
+              const Icon(Icons.error, color: Colors.red),
+          ],
+        ),
+      );
+    } else {
+      return ElevatedButton.icon(
+        icon: const Icon(Icons.download, size: 18),
+        label: const Text("保存", style: TextStyle(fontSize: 12)),
+        style: ElevatedButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        ),
+        onPressed: () {
+          if (url != null) {
+            setState(() {
+              _currentIndex = index;
+              _isDownloading = true;
+              _downloadProgress = 0.0;
+              _downloadSuccess = false;
+              _downloadFailed = false;
+            });
+            _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
+          }
+        },
+      );
+    }
   }
 
   @override
-  Widget build(BuildContext context) {                      //build()メソッド
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("YouTube音声再生")),
       body: Padding(
@@ -483,7 +478,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                 ],
               ),
 
-
             const Divider(height: 20),
 
             if (_playlist.isNotEmpty)
@@ -494,28 +488,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   setState(() => _isPlaylistExpanded = expanded);
                 },
                 children: [
-                  if (_isDownloading)
-                    Column(
-                      children: [
-                        const SizedBox(height: 16),
-                        const Text("ダウンロード中..."),
-                        const SizedBox(height: 8),
-                        SizedBox(
-                          height: 60,
-                          width: 60,
-                          child: Stack(
-                            alignment: Alignment.center,
-                            children: [
-                              CircularProgressIndicator(
-                                value: _downloadProgress,
-                                strokeWidth: 6,
-                              ),
-                              Text('${(_downloadProgress * 100).toStringAsFixed(0)}%'),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
                   SizedBox(
                     height: 200, // 高さを必要に応じて調整
                     child: ListView.builder(
@@ -528,21 +500,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                           title: Row(
                             children: [
                               Expanded(child: Text(item['title'] ?? '')),
-                              ElevatedButton.icon(
-                                icon: const Icon(Icons.download, size: 18),
-                                label: const Text("保存", style: TextStyle(fontSize: 12)),
-                                style: ElevatedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                ),
-                                onPressed: () {
-                                  final title = item['title'] ?? 'download';
-                                  final url = item['url'];
-                                  final thumb = item['thumbnailUrl'];
-                                  if (url != null) {
-                                    _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
-                                  }
-                                },
-                              ),
+                              _buildDownloadButton(index),
                             ],
                           ),
                           onTap: () => _playFromPlaylist(index),
@@ -558,9 +516,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   ),
                 ],
               ),
-
-
-
           ],
         ),
       ),
