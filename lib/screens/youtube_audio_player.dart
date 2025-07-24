@@ -24,6 +24,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
   final List<Map<String, String>> _playlist = [];
   int _currentIndex = 0;
+  double _downloadProgress = 0.0;
 
   bool _isLoading = false;
   bool _isPlaying = false;
@@ -31,6 +32,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   bool _isLooping = false;
   bool _isShuffling = false;
   bool _isPlaylistExpanded = false;
+  bool _isDownloading = false;
 
   String? _videoTitle;
   String? _thumbnailUrl;
@@ -198,6 +200,12 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         return;
       }
 
+      setState(() {
+        _isDownloading = true;
+        _downloadProgress = 0.0;
+      });
+
+
       final path = await _getDownloadPath();
       final filePath = '$path/$filename.webm';
       final thumbPath = '$path/$filename.jpg';
@@ -208,7 +216,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         filePath,
         onReceiveProgress: (received, total) {
           if (total != -1) {
-            print("進行状況: ${(received / total * 100).toStringAsFixed(0)}%");
+            final progress = received / total;
+            setState(() => _downloadProgress = progress);
           }
         },
       );
@@ -220,19 +229,25 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
           thumbPath,
           onReceiveProgress: (received, total) {
             if (total != -1) {
-              print("サムネイル進行状況: ${(received / total * 100).toStringAsFixed(0)}%");
+              final progress = received / total;
+              setState(() => _downloadProgress = progress);
             }
           },
         );
       }
 
-      print("保存完了: $filePath");
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("保存しました: $filename")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("保存しました: $filename")),
+      );
     } catch (e) {
       print("保存エラー: $e");
+    } finally {
+      setState(() {
+        _isDownloading = false;
+        _downloadProgress = 0.0;
+      });
     }
   }
-
 
   Future<void> _fetchAndDownloadAudio(String videoUrl, String title, {String? thumbnailUrl}) async {
     try {
@@ -307,7 +322,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) {                      //build()メソッド
     return Scaffold(
       appBar: AppBar(title: const Text("YouTube音声再生")),
       body: Padding(
@@ -479,6 +494,28 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   setState(() => _isPlaylistExpanded = expanded);
                 },
                 children: [
+                  if (_isDownloading)
+                    Column(
+                      children: [
+                        const SizedBox(height: 16),
+                        const Text("ダウンロード中..."),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          height: 60,
+                          width: 60,
+                          child: Stack(
+                            alignment: Alignment.center,
+                            children: [
+                              CircularProgressIndicator(
+                                value: _downloadProgress,
+                                strokeWidth: 6,
+                              ),
+                              Text('${(_downloadProgress * 100).toStringAsFixed(0)}%'),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
                   SizedBox(
                     height: 200, // 高さを必要に応じて調整
                     child: ListView.builder(
@@ -521,6 +558,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   ),
                 ],
               ),
+
 
 
           ],
