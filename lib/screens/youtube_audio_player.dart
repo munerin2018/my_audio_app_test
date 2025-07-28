@@ -7,6 +7,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
 
+import '../widgets/banner_ad_widget.dart';
+
 class YouTubeAudioPlayer extends StatefulWidget {
   const YouTubeAudioPlayer({super.key});
 
@@ -20,6 +22,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   final FocusNode _focusNode = FocusNode();
 
   final List<Map<String, String>> _playlist = [];
+  int? _downloadingIndex;
   int _currentIndex = 0;
 
   bool _isLoading = false;
@@ -276,44 +279,103 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     final url = item['url'];
     final thumb = item['thumbnailUrl'];
 
-    if (_isDownloading && index == _currentIndex) {
-      return Center(
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            CircularProgressIndicator(
-              value: _downloadProgress,
-              backgroundColor: Colors.grey[300],
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.blue),
+    // ダウンロード状態を保持しているアイテムか判定
+    if (index == _downloadingIndex) {
+      if (_isDownloading) {
+        // ダウンロード中の表示 (プログレスバーとパーセンテージ)
+        return SizedBox(
+          width: 90, // ボタンと幅を合わせる
+          height: 36,
+          child: Center(
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                CircularProgressIndicator(
+                  value: _downloadProgress,
+                  strokeWidth: 3.0,
+                  backgroundColor: Colors.grey.shade300,
+                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                ),
+                Text(
+                  '${(_downloadProgress * 100).toInt()}%',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black54,
+                  ),
+                ),
+              ],
             ),
-            if (_downloadSuccess)
-              const Icon(Icons.check_circle, color: Colors.green),
-            if (_downloadFailed)
-              const Icon(Icons.error, color: Colors.red),
-          ],
-        ),
-      );
-    } else {
-      return ElevatedButton.icon(
-        icon: const Icon(Icons.download, size: 18),
-        label: const Text("保存", style: TextStyle(fontSize: 12)),
-        style: ElevatedButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        ),
-        onPressed: () {
-          if (url != null) {
-            setState(() {
-              _currentIndex = index;
-              _isDownloading = true;
-              _downloadProgress = 0.0;
-              _downloadSuccess = false;
-              _downloadFailed = false;
-            });
-            _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
-          }
-        },
-      );
+          ),
+        );
+      } else if (_downloadSuccess) {
+        // ダウンロード成功の表示
+        return SizedBox(
+          width: 90,
+          height: 36,
+          child: Center(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                const SizedBox(width: 4),
+                const Text("完了", style: TextStyle(color: Colors.green, fontSize: 12)),
+              ],
+            ),
+          ),
+        );
+      } else if (_downloadFailed) {
+        // ダウンロード失敗の表示 (リトライボタン)
+        return SizedBox(
+          width: 90,
+          height: 36,
+          child: Tooltip(
+            message: '再試行',
+            child: TextButton.icon(
+              icon: const Icon(Icons.error, color: Colors.red, size: 18),
+              label: const Text("失敗", style: TextStyle(color: Colors.red, fontSize: 12)),
+              onPressed: () {
+                if (url != null) {
+                  setState(() {
+                    _downloadingIndex = index;
+                    _isDownloading = true;
+                    _downloadProgress = 0.0;
+                    _downloadSuccess = false;
+                    _downloadFailed = false;
+                  });
+                  _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
+                }
+              },
+            ),
+          ),
+        );
+      }
     }
+
+    // 通常時のダウンロードボタン
+    return ElevatedButton.icon(
+      icon: const Icon(Icons.download, size: 18),
+      label: const Text("保存", style: TextStyle(fontSize: 12)),
+      style: ElevatedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        fixedSize: const Size(90, 36), // 幅と高さを固定してレイアウト崩れを防ぐ
+      ),
+      onPressed: _isDownloading // 他のアイテムがダウンロード中は無効化
+          ? null
+          : () {
+        if (url != null) {
+          // 元のコードにあった_currentIndexの更新はバグの原因になるため削除
+          setState(() {
+            _downloadingIndex = index;
+            _isDownloading = true;
+            _downloadProgress = 0.0;
+            _downloadSuccess = false;
+            _downloadFailed = false;
+          });
+          _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
+        }
+      },
+    );
   }
 
   @override
@@ -516,6 +578,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   ),
                 ],
               ),
+            const BannerAdWidget(),//バナー広告
           ],
         ),
       ),

@@ -1,7 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.example.youtube_audio_player_fixed">
+    <!-- 広告表示 -->
+        <uses-permission android:name="android.permission.INTERNET"/>
+        <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
-    <!-- 👇 ここに uses-permission を追加 -->
+
+        <!-- 👇 ここに uses-permission を追加 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
@@ -10,9 +14,14 @@
 
     <application
         android:requestLegacyExternalStorage="true"
-        android:label="youtube_audio_player_fixed"
+        android:label="ようつべ音声プレイヤー"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+
+    <!-- 広告ID（AdMobのIDに変更可） -->
+    <meta-data
+        android:name="com.google.android.gms.ads.APPLICATION_ID"
+        android:value="ca-app-pub-3940256099942544~3347511713"/>
 
         <!-- Activityなどはこの中に -->
         <activity

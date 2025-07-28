@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:video_player/video_player.dart';
 import 'package:file_selector/file_selector.dart'; // ✅ file_selector に変更
+import '../widgets/banner_ad_widget.dart';
 
 class LocalFilePlayer extends StatefulWidget {
   const LocalFilePlayer({super.key});
@@ -16,6 +17,8 @@ class _LocalFilePlayerState extends State<LocalFilePlayer> {
   VideoPlayerController? _videoController;
   String? _filePath;
   bool _isVideo = false;
+
+
 
   @override
   void dispose() {
@@ -78,6 +81,7 @@ class _LocalFilePlayerState extends State<LocalFilePlayer> {
               ),
             const SizedBox(height: 20),
             if (!_isVideo && _filePath != null)
+
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -98,9 +102,11 @@ class _LocalFilePlayerState extends State<LocalFilePlayer> {
                   ),
                 ],
               ),
+            const BannerAdWidget(),//バナー広告
           ],
         ),
       ),
     );
   }
 }
+
