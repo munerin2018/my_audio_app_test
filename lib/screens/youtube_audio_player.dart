@@ -1,3 +1,4 @@
+import 'dart:convert'; // ★ 1. JSON変換のためにインポート
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
@@ -6,28 +7,42 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // ★ 2. パッケージをインポート
 
 import '../widgets/banner_ad_widget.dart';
 
-// ★ 1. ダウンロードの状態を管理するためのenumを定義
 enum DownloadState { none, downloading, success, failed }
 
-// ★ 2. プレイリストの各アイテムの状態を管理するクラスを定義
 class PlaylistItem {
   final String title;
-  final String url; // YouTube video URL
+  final String url;
   final String? thumbnailUrl;
 
-  // 各アイテムが個別にダウンロード状態を持つ
   DownloadState downloadState = DownloadState.none;
   double downloadProgress = 0.0;
-  CancelToken? cancelToken; // ダウンロードキャンセル用
+  CancelToken? cancelToken;
 
   PlaylistItem({
     required this.title,
     required this.url,
     this.thumbnailUrl,
   });
+
+  // ★ 3. オブジェクトをMap(JSON形式)に変換するメソッドを追加
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'url': url,
+    'thumbnailUrl': thumbnailUrl,
+  };
+
+  // ★ 4. Map(JSON形式)からオブジェクトを生成するファクトリコンストラクタを追加
+  factory PlaylistItem.fromJson(Map<String, dynamic> json) {
+    return PlaylistItem(
+      title: json['title'],
+      url: json['url'],
+      thumbnailUrl: json['thumbnailUrl'],
+    );
+  }
 }
 
 
@@ -43,7 +58,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _focusNode = FocusNode();
 
-  // ★ 3. プレイリストのデータ構造をPlaylistItemクラスのリストに変更
   final List<PlaylistItem> _playlist = [];
   int _currentIndex = 0;
 
@@ -59,10 +73,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
 
-  // ★ 4. グローバルなダウンロード状態変数を削除
-  // bool _isDownloading = false; ... etc.
-
-  // ★ 5. DioとYoutubeExplodeのインスタンスを共有してパフォーマンス向上
   final Dio _dio = Dio();
   final YoutubeExplode _yt = YoutubeExplode();
 
@@ -70,6 +80,9 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   @override
   void initState() {
     super.initState();
+    // ★ 5. アプリ起動時にプレイリストを読み込む
+    _loadPlaylist();
+
     _focusNode.addListener(() {
       if (_focusNode.hasFocus) {
         _urlController.selection = TextSelection(
@@ -81,9 +94,31 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     _urlController.addListener(() => setState(() {}));
   }
 
+  // ★ 6. 保存・読み込みメソッドを追加
+  // --- Playlist Persistence ---
+  Future<void> _savePlaylist() async {
+    final prefs = await SharedPreferences.getInstance();
+    List<String> playlistJson = _playlist.map((item) => jsonEncode(item.toJson())).toList();
+    await prefs.setStringList('youtube_playlist', playlistJson);
+  }
+
+  Future<void> _loadPlaylist() async {
+    final prefs = await SharedPreferences.getInstance();
+    final List<String>? playlistJson = prefs.getStringList('youtube_playlist');
+    if (playlistJson != null) {
+      setState(() {
+        _playlist.clear();
+        _playlist.addAll(
+            playlistJson.map((item) => PlaylistItem.fromJson(jsonDecode(item)))
+        );
+      });
+    }
+  }
+  // --- End of Persistence ---
+
+
   @override
   void dispose() {
-    // 進行中のダウンロードをキャンセル
     for (var item in _playlist) {
       item.cancelToken?.cancel("Widget disposed");
     }
@@ -188,11 +223,9 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     return true;
   }
 
-  // ★ 6. 各アイテムのダウンロードを開始するメソッド
   Future<void> _startDownload(int index) async {
     final item = _playlist[index];
 
-    // 既にダウンロード中または完了している場合は何もしない
     if (item.downloadState == DownloadState.downloading || item.downloadState == DownloadState.success) {
       return;
     }
@@ -223,7 +256,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
       final filePath = '$path/$sanitizedFilename.webm';
       final thumbPath = '$path/$sanitizedFilename.jpg';
 
-      // 音声ファイルをダウンロード
       await _dio.download(
         audioStreamInfo.url.toString(),
         filePath,
@@ -237,7 +269,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         },
       );
 
-      // サムネイルをダウンロード
       if (item.thumbnailUrl != null && item.thumbnailUrl!.isNotEmpty) {
         await _dio.download(
           item.thumbnailUrl!,
@@ -274,12 +305,10 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     }
   }
 
-  // ★ 7. プレイリストからアイテムを削除するメソッド (ダウンロードキャンセルも含む)
   void _deletePlaylistItem(int index) {
     if (index >= _playlist.length) return;
 
     final item = _playlist[index];
-    // ダウンロード中ならキャンセル
     if (item.downloadState == DownloadState.downloading) {
       item.cancelToken?.cancel("Item deleted by user");
     }
@@ -295,12 +324,11 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         _duration = Duration.zero;
         _position = Duration.zero;
       } else if (index == _currentIndex) {
-        // 再生中の曲を削除した場合、次の曲を再生
         _playFromPlaylist(_currentIndex % _playlist.length);
       } else if (index < _currentIndex) {
-        // 削除したのが再生中の曲より前ならインデックスをデクリメント
         _currentIndex--;
       }
+      _savePlaylist(); // ★ 7. 削除後に保存処理を呼び出す
     });
   }
 
@@ -311,38 +339,27 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     return '$m:$s';
   }
 
-  // ★ 8. 各アイテムの状態に応じてダウンロードボタンのUIを生成するWidget
   Widget _buildDownloadButton(int index) {
+    // (このメソッドは変更なし)
     final item = _playlist[index];
-
-    // ボタンのスタイルを共通化
     const buttonSize = Size(90, 36);
     const textStyle = TextStyle(fontSize: 12);
 
     switch (item.downloadState) {
       case DownloadState.downloading:
-        return SizedBox(
-          width: buttonSize.width,
-          height: buttonSize.height,
+        return SizedBox( width: buttonSize.width, height: buttonSize.height,
           child: Center(
-            child: Stack(
-              alignment: Alignment.center,
+            child: Stack( alignment: Alignment.center,
               children: [
-                CircularProgressIndicator(
-                  value: item.downloadProgress,
-                  strokeWidth: 3.0,
-                ),
+                CircularProgressIndicator( value: item.downloadProgress, strokeWidth: 3.0, ),
                 Text('${(item.downloadProgress * 100).toInt()}%', style: const TextStyle(fontSize: 10)),
               ],
             ),
           ),
         );
       case DownloadState.success:
-        return SizedBox(
-          width: buttonSize.width,
-          height: buttonSize.height,
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
+        return SizedBox( width: buttonSize.width, height: buttonSize.height,
+          child: const Row( mainAxisSize: MainAxisSize.min,
             children: [
               Icon(Icons.check_circle, color: Colors.green, size: 20),
               SizedBox(width: 4),
@@ -351,9 +368,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
           ),
         );
       case DownloadState.failed:
-        return SizedBox(
-          width: buttonSize.width,
-          height: buttonSize.height,
+        return SizedBox( width: buttonSize.width, height: buttonSize.height,
           child: TextButton.icon(
             icon: const Icon(Icons.error, color: Colors.red, size: 18),
             label: const Text("失敗", style: TextStyle(color: Colors.red, fontSize: 12)),
@@ -362,7 +377,6 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         );
       case DownloadState.none:
       default:
-      // このボタンは他のダウンロード状態に影響されずに押せる
         return ElevatedButton.icon(
           icon: const Icon(Icons.download, size: 18),
           label: const Text("保存", style: textStyle),
@@ -378,10 +392,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
       appBar: AppBar(title: const Text("YouTube音声再生")),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        // ★ 9. レイアウト構造を修正
         child: Column(
           children: [
-            // --- 検索バー ---
             Row(
               children: [
                 Expanded(
@@ -392,7 +404,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                       labelText: 'YouTubeのURLを入力',
                       border: OutlineInputBorder(),
                     ),
-                    onSubmitted: (_) => _searchAndAddSong(), // Enterでも検索
+                    onSubmitted: (_) => _searchAndAddSong(),
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -405,14 +417,11 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
             ),
             const SizedBox(height: 10),
 
-            // --- プレイヤーUI ---
             if (_videoTitle != null)
               _buildPlayerControls(),
 
             const Divider(),
 
-            // --- プレイリスト ---
-            // ★ 10. Expandedでラップして、残りのスペースでスクロール可能にする
             Expanded(
               child: Column(
                 children: [
@@ -423,7 +432,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                         itemBuilder: (context, index) {
                           final item = _playlist[index];
                           final isPlaying = index == _currentIndex && _isPlaying;
-                          return Card( // ListTileをCardで囲んで見やすく
+                          return Card(
                             color: isPlaying ? Colors.blue.withOpacity(0.1) : null,
                             child: ListTile(
                               leading: item.thumbnailUrl != null
@@ -455,11 +464,10 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     );
   }
 
-  // 検索と追加のロジックを共通化
   void _searchAndAddSong() async {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
-    FocusScope.of(context).unfocus(); // キーボードを閉じる
+    FocusScope.of(context).unfocus();
 
     try {
       final video = await _yt.videos.get(VideoId(url));
@@ -470,10 +478,10 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
       );
       setState(() {
         _playlist.add(newItem);
-        // プレイリストの最初の曲なら自動再生
         if (_playlist.length == 1 && !_isPlaying) {
           _playFromPlaylist(0);
         }
+        _savePlaylist(); // ★ 8. 追加後に保存処理を呼び出す
       });
       _urlController.clear();
     } catch (e) {
@@ -486,7 +494,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     }
   }
 
-  // プレイヤーUIを別Widgetに切り出し
+  // (前のコードの続きから)
+
   Widget _buildPlayerControls() {
     return Column(
       children: [
@@ -506,7 +515,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                   IconButton(icon: const Icon(Icons.replay_10, color: Colors.white, size: 32), onPressed: () => _seekBy(const Duration(seconds: -10))),
                   IconButton(icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, size: 48, color: Colors.white), onPressed: _togglePlayPause),
                   IconButton(icon: const Icon(Icons.forward_10, color: Colors.white, size: 32), onPressed: () => _seekBy(const Duration(seconds: 10))),
-                  IconButton(icon: const Icon(Icons.skip_next, size: 36, color: Colors.white), onPressed: _playNext),
+                  IconButton(icon: const Icon(Icons.skip_next, size: 36, color: Colors.white), onPressed: _playNext), // ★ ここが途切れていた部分
                 ],
               ),
             ],
@@ -514,7 +523,7 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         const SizedBox(height: 8),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8.0),
-          child: Text("🎵 $_videoTitle", style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+          child: Text("🎵 ${_videoTitle ?? ''}", style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
         ),
         Slider(
           min: 0, max: _duration.inSeconds.toDouble(),
