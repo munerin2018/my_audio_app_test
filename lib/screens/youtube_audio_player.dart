@@ -9,6 +9,28 @@ import 'package:device_info_plus/device_info_plus.dart';
 
 import '../widgets/banner_ad_widget.dart';
 
+// ★ 1. ダウンロードの状態を管理するためのenumを定義
+enum DownloadState { none, downloading, success, failed }
+
+// ★ 2. プレイリストの各アイテムの状態を管理するクラスを定義
+class PlaylistItem {
+  final String title;
+  final String url; // YouTube video URL
+  final String? thumbnailUrl;
+
+  // 各アイテムが個別にダウンロード状態を持つ
+  DownloadState downloadState = DownloadState.none;
+  double downloadProgress = 0.0;
+  CancelToken? cancelToken; // ダウンロードキャンセル用
+
+  PlaylistItem({
+    required this.title,
+    required this.url,
+    this.thumbnailUrl,
+  });
+}
+
+
 class YouTubeAudioPlayer extends StatefulWidget {
   const YouTubeAudioPlayer({super.key});
 
@@ -21,8 +43,8 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FocusNode _focusNode = FocusNode();
 
-  final List<Map<String, String>> _playlist = [];
-  int? _downloadingIndex;
+  // ★ 3. プレイリストのデータ構造をPlaylistItemクラスのリストに変更
+  final List<PlaylistItem> _playlist = [];
   int _currentIndex = 0;
 
   bool _isLoading = false;
@@ -30,18 +52,20 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   bool _isOverlayVisible = false;
   bool _isLooping = false;
   bool _isShuffling = false;
-  bool _isPlaylistExpanded = false;
+  bool _isPlaylistExpanded = true;
 
   String? _videoTitle;
   String? _thumbnailUrl;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
 
-  // Download state variables
-  bool _isDownloading = false;
-  double _downloadProgress = 0.0;
-  bool _downloadSuccess = false;
-  bool _downloadFailed = false;
+  // ★ 4. グローバルなダウンロード状態変数を削除
+  // bool _isDownloading = false; ... etc.
+
+  // ★ 5. DioとYoutubeExplodeのインスタンスを共有してパフォーマンス向上
+  final Dio _dio = Dio();
+  final YoutubeExplode _yt = YoutubeExplode();
+
 
   @override
   void initState() {
@@ -59,6 +83,11 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
 
   @override
   void dispose() {
+    // 進行中のダウンロードをキャンセル
+    for (var item in _playlist) {
+      item.cancelToken?.cancel("Widget disposed");
+    }
+    _yt.close();
     _audioPlayer.dispose();
     _urlController.dispose();
     _focusNode.dispose();
@@ -66,15 +95,12 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   }
 
   Future<void> _playAudio(String url) async {
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() { _isLoading = true; });
 
     try {
-      final yt = YoutubeExplode();
       final videoId = VideoId(url);
-      final video = await yt.videos.get(videoId);
-      final manifest = await yt.videos.streamsClient.getManifest(videoId);
+      final video = await _yt.videos.get(videoId);
+      final manifest = await _yt.videos.streamsClient.getManifest(videoId);
       final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
 
       if (audioStreamInfo != null) {
@@ -82,26 +108,25 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
         await _audioPlayer.load();
         await _audioPlayer.play();
 
-        setState(() {
-          _videoTitle = video.title;
-          _thumbnailUrl = video.thumbnails.highResUrl;
-          _isPlaying = true;
-        });
+        if (mounted) {
+          setState(() {
+            _videoTitle = video.title;
+            _thumbnailUrl = video.thumbnails.highResUrl;
+            _isPlaying = true;
+          });
+        }
 
         _audioPlayer.durationStream.listen((d) {
-          if (d != null) setState(() => _duration = d);
+          if (d != null && mounted) setState(() => _duration = d);
         });
-
         _audioPlayer.positionStream.listen((p) {
-          setState(() => _position = p);
+          if (mounted) setState(() => _position = p);
         });
       }
-
-      yt.close();
     } catch (e) {
-      print("エラー: $e");
+      print("再生エラー: $e");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -111,37 +136,20 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     } else {
       _audioPlayer.play();
     }
-    setState(() {
-      _isPlaying = !_isPlaying;
-      _isOverlayVisible = true;
-    });
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _isOverlayVisible = false);
-    });
+    setState(() { _isPlaying = !_isPlaying; });
   }
 
   void _seekBy(Duration offset) async {
     final target = _audioPlayer.position + offset;
     final clamped = Duration(milliseconds: target.inMilliseconds.clamp(0, _duration.inMilliseconds));
     await _audioPlayer.seek(clamped);
-    setState(() => _isOverlayVisible = true);
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) setState(() => _isOverlayVisible = false);
-    });
-  }
-
-  void _showOverlayTemporarily() {
-    setState(() => _isOverlayVisible = true);
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _isOverlayVisible = false);
-    });
   }
 
   void _playFromPlaylist(int index) {
-    if (_playlist.isEmpty) return;
+    if (_playlist.isEmpty || index >= _playlist.length) return;
     if (_isShuffling) _playlist.shuffle();
     _currentIndex = index % _playlist.length;
-    _playAudio(_playlist[_currentIndex]['url']!);
+    _playAudio(_playlist[_currentIndex].url);
   }
 
   void _playNext() {
@@ -159,113 +167,143 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
   Future<String> _getDownloadPath() async {
     if (Platform.isAndroid) {
       final directory = Directory('/storage/emulated/0/Download');
-      if (await directory.exists()) {
-        return directory.path;
-      } else {
-        await directory.create(recursive: true);
+      if (await directory.exists() || await directory.create(recursive: true) != null) {
         return directory.path;
       }
-    } else {
-      final dir = await getDownloadsDirectory(); // macOS / Windows 用
-      return dir?.path ?? '';
     }
+    final dir = await getDownloadsDirectory();
+    return dir?.path ?? '';
   }
 
   Future<bool> _requestStoragePermission() async {
     if (Platform.isAndroid) {
       final deviceInfo = DeviceInfoPlugin();
       final androidInfo = await deviceInfo.androidInfo;
-      final sdkInt = androidInfo.version.sdkInt;
-
-      if (sdkInt >= 33) {
-        var audio = await Permission.audio.request();
-        return audio.isGranted;
+      if (androidInfo.version.sdkInt >= 33) {
+        return await Permission.audio.request().isGranted;
       } else {
-        var storage = await Permission.storage.request();
-        return storage.isGranted;
+        return await Permission.storage.request().isGranted;
       }
     }
-    return true; // iOSや他のプラットフォーム
+    return true;
   }
 
-  Future<void> _downloadAudio(String url, String filename, String? thumbnailUrl) async {
+  // ★ 6. 各アイテムのダウンロードを開始するメソッド
+  Future<void> _startDownload(int index) async {
+    final item = _playlist[index];
+
+    // 既にダウンロード中または完了している場合は何もしない
+    if (item.downloadState == DownloadState.downloading || item.downloadState == DownloadState.success) {
+      return;
+    }
+
+    item.cancelToken = CancelToken();
+    if (mounted) {
+      setState(() {
+        item.downloadState = DownloadState.downloading;
+        item.downloadProgress = 0.0;
+      });
+    }
+
     try {
       final granted = await _requestStoragePermission();
       if (!granted) {
-        print("ストレージのアクセスが許可されていません");
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("保存にはストレージ権限が必要です")),
-        );
-        return;
+        throw Exception("ストレージのアクセスが許可されていません");
+      }
+
+      final manifest = await _yt.videos.streamsClient.getManifest(VideoId(item.url));
+      final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
+
+      if (audioStreamInfo == null) {
+        throw Exception("音声ストリームが見つかりませんでした");
       }
 
       final path = await _getDownloadPath();
-      final filePath = '$path/$filename.webm';
-      final thumbPath = '$path/$filename.jpg';
+      final sanitizedFilename = item.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+      final filePath = '$path/$sanitizedFilename.webm';
+      final thumbPath = '$path/$sanitizedFilename.jpg';
 
-      final dio = Dio();
-      await dio.download(
-        url,
+      // 音声ファイルをダウンロード
+      await _dio.download(
+        audioStreamInfo.url.toString(),
         filePath,
+        cancelToken: item.cancelToken,
         onReceiveProgress: (received, total) {
-          if (total != -1) {
+          if (total != -1 && mounted) {
             setState(() {
-              _downloadProgress = received / total;
-              _isDownloading = true;
-              _downloadSuccess = false;
-              _downloadFailed = false;
+              item.downloadProgress = received / total;
             });
           }
         },
       );
 
-      // サムネイル画像のダウンロード（もしURLが存在すれば）
-      if (thumbnailUrl != null && thumbnailUrl.isNotEmpty) {
-        await dio.download(
-          thumbnailUrl,
+      // サムネイルをダウンロード
+      if (item.thumbnailUrl != null && item.thumbnailUrl!.isNotEmpty) {
+        await _dio.download(
+          item.thumbnailUrl!,
           thumbPath,
-          onReceiveProgress: (received, total) {
-            if (total != -1) {
-              print("サムネイル進行状況: ${(received / total * 100).toStringAsFixed(0)}%");
-            }
-          },
+          cancelToken: item.cancelToken,
         );
       }
 
-      print("保存完了: $filePath");
-      setState(() {
-        _isDownloading = false;
-        _downloadSuccess = true;
-        _downloadFailed = false;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("保存しました: $filename")));
-    } catch (e) {
-      print("保存エラー: $e");
-      setState(() {
-        _isDownloading = false;
-        _downloadSuccess = false;
-        _downloadFailed = true;
-      });
-    }
-  }
-
-  Future<void> _fetchAndDownloadAudio(String videoUrl, String title, {String? thumbnailUrl}) async {
-    try {
-      final yt = YoutubeExplode();
-      final videoId = VideoId(videoUrl);
-      final manifest = await yt.videos.streamsClient.getManifest(videoId);
-      final audioStreamInfo = manifest.audioOnly.withHighestBitrate();
-
-      if (audioStreamInfo != null) {
-        final downloadUrl = audioStreamInfo.url.toString();
-        await _downloadAudio(downloadUrl, title, thumbnailUrl);
+      if (mounted) {
+        setState(() {
+          item.downloadState = DownloadState.success;
+        });
+        if(context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("保存しました: ${item.title}")));
+        }
       }
-
-      yt.close();
     } catch (e) {
-      print("音声取得失敗: $e");
+      if (e is DioException && e.type == DioExceptionType.cancel) {
+        print("Download cancelled for ${item.title}");
+        if(mounted) {
+          setState(() {
+            item.downloadState = DownloadState.none;
+            item.downloadProgress = 0.0;
+          });
+        }
+        return;
+      }
+      print("保存エラー (${item.title}): $e");
+      if (mounted) {
+        setState(() {
+          item.downloadState = DownloadState.failed;
+        });
+      }
     }
   }
+
+  // ★ 7. プレイリストからアイテムを削除するメソッド (ダウンロードキャンセルも含む)
+  void _deletePlaylistItem(int index) {
+    if (index >= _playlist.length) return;
+
+    final item = _playlist[index];
+    // ダウンロード中ならキャンセル
+    if (item.downloadState == DownloadState.downloading) {
+      item.cancelToken?.cancel("Item deleted by user");
+    }
+
+    setState(() {
+      _playlist.removeAt(index);
+
+      if (_playlist.isEmpty) {
+        _audioPlayer.stop();
+        _videoTitle = null;
+        _thumbnailUrl = null;
+        _isPlaying = false;
+        _duration = Duration.zero;
+        _position = Duration.zero;
+      } else if (index == _currentIndex) {
+        // 再生中の曲を削除した場合、次の曲を再生
+        _playFromPlaylist(_currentIndex % _playlist.length);
+      } else if (index < _currentIndex) {
+        // 削除したのが再生中の曲より前ならインデックスをデクリメント
+        _currentIndex--;
+      }
+    });
+  }
+
 
   String _formatDuration(Duration d) {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
@@ -273,109 +311,65 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     return '$m:$s';
   }
 
+  // ★ 8. 各アイテムの状態に応じてダウンロードボタンのUIを生成するWidget
   Widget _buildDownloadButton(int index) {
     final item = _playlist[index];
-    final title = item['title'] ?? 'download';
-    final url = item['url'];
-    final thumb = item['thumbnailUrl'];
 
-    // ダウンロード状態を保持しているアイテムか判定
-    if (index == _downloadingIndex) {
-      if (_isDownloading) {
-        // ダウンロード中の表示 (プログレスバーとパーセンテージ)
+    // ボタンのスタイルを共通化
+    const buttonSize = Size(90, 36);
+    const textStyle = TextStyle(fontSize: 12);
+
+    switch (item.downloadState) {
+      case DownloadState.downloading:
         return SizedBox(
-          width: 90, // ボタンと幅を合わせる
-          height: 36,
+          width: buttonSize.width,
+          height: buttonSize.height,
           child: Center(
             child: Stack(
               alignment: Alignment.center,
               children: [
                 CircularProgressIndicator(
-                  value: _downloadProgress,
+                  value: item.downloadProgress,
                   strokeWidth: 3.0,
-                  backgroundColor: Colors.grey.shade300,
-                  valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
                 ),
-                Text(
-                  '${(_downloadProgress * 100).toInt()}%',
-                  style: const TextStyle(
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.black54,
-                  ),
-                ),
+                Text('${(item.downloadProgress * 100).toInt()}%', style: const TextStyle(fontSize: 10)),
               ],
             ),
           ),
         );
-      } else if (_downloadSuccess) {
-        // ダウンロード成功の表示
+      case DownloadState.success:
         return SizedBox(
-          width: 90,
-          height: 36,
-          child: Center(
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.check_circle, color: Colors.green, size: 20),
-                const SizedBox(width: 4),
-                const Text("完了", style: TextStyle(color: Colors.green, fontSize: 12)),
-              ],
-            ),
+          width: buttonSize.width,
+          height: buttonSize.height,
+          child: const Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.check_circle, color: Colors.green, size: 20),
+              SizedBox(width: 4),
+              Text("完了", style: TextStyle(color: Colors.green, fontSize: 12)),
+            ],
           ),
         );
-      } else if (_downloadFailed) {
-        // ダウンロード失敗の表示 (リトライボタン)
+      case DownloadState.failed:
         return SizedBox(
-          width: 90,
-          height: 36,
-          child: Tooltip(
-            message: '再試行',
-            child: TextButton.icon(
-              icon: const Icon(Icons.error, color: Colors.red, size: 18),
-              label: const Text("失敗", style: TextStyle(color: Colors.red, fontSize: 12)),
-              onPressed: () {
-                if (url != null) {
-                  setState(() {
-                    _downloadingIndex = index;
-                    _isDownloading = true;
-                    _downloadProgress = 0.0;
-                    _downloadSuccess = false;
-                    _downloadFailed = false;
-                  });
-                  _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
-                }
-              },
-            ),
+          width: buttonSize.width,
+          height: buttonSize.height,
+          child: TextButton.icon(
+            icon: const Icon(Icons.error, color: Colors.red, size: 18),
+            label: const Text("失敗", style: TextStyle(color: Colors.red, fontSize: 12)),
+            onPressed: () => _startDownload(index),
           ),
         );
-      }
+      case DownloadState.none:
+      default:
+      // このボタンは他のダウンロード状態に影響されずに押せる
+        return ElevatedButton.icon(
+          icon: const Icon(Icons.download, size: 18),
+          label: const Text("保存", style: textStyle),
+          style: ElevatedButton.styleFrom(fixedSize: buttonSize),
+          onPressed: () => _startDownload(index),
+        );
     }
-
-    // 通常時のダウンロードボタン
-    return ElevatedButton.icon(
-      icon: const Icon(Icons.download, size: 18),
-      label: const Text("保存", style: TextStyle(fontSize: 12)),
-      style: ElevatedButton.styleFrom(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        fixedSize: const Size(90, 36), // 幅と高さを固定してレイアウト崩れを防ぐ
-      ),
-      onPressed: _isDownloading // 他のアイテムがダウンロード中は無効化
-          ? null
-          : () {
-        if (url != null) {
-          // 元のコードにあった_currentIndexの更新はバグの原因になるため削除
-          setState(() {
-            _downloadingIndex = index;
-            _isDownloading = true;
-            _downloadProgress = 0.0;
-            _downloadSuccess = false;
-            _downloadFailed = false;
-          });
-          _fetchAndDownloadAudio(url, title, thumbnailUrl: thumb);
-        }
-      },
-    );
   }
 
   @override
@@ -383,9 +377,11 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
     return Scaffold(
       appBar: AppBar(title: const Text("YouTube音声再生")),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(16.0),
+        // ★ 9. レイアウト構造を修正
         child: Column(
           children: [
+            // --- 検索バー ---
             Row(
               children: [
                 Expanded(
@@ -396,192 +392,145 @@ class _YouTubeAudioPlayerState extends State<YouTubeAudioPlayer> {
                       labelText: 'YouTubeのURLを入力',
                       border: OutlineInputBorder(),
                     ),
+                    onSubmitted: (_) => _searchAndAddSong(), // Enterでも検索
                   ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('検索'),
-                  onPressed: () async {
-                    final url = _urlController.text.trim();
-                    if (url.isEmpty) return;
-
-                    final yt = YoutubeExplode();
-                    try {
-                      final video = await yt.videos.get(VideoId(url));
-                      final title = video.title;
-                      final thumb = video.thumbnails.mediumResUrl;
-                      setState(() {
-                        _playlist.add({
-                          'title': title,
-                          'url': url,
-                          'thumbnailUrl': thumb,
-                        });
-                        _currentIndex = _playlist.length - 1;
-                      });
-                      _playAudio(url);
-                    } catch (e) {
-                      print('再生失敗: $e');
-                    } finally {
-                      yt.close();
-                    }
-                  },
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  icon: const Icon(Icons.clear),
-                  onPressed: () => _urlController.clear(),
+                  icon: const Icon(Icons.add),
+                  onPressed: _searchAndAddSong,
+                  tooltip: "プレイリストに追加",
                 ),
               ],
             ),
-
             const SizedBox(height: 10),
 
-            if (_thumbnailUrl != null)
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  Image.network(
-                    _thumbnailUrl!,
-                    height: 200,
-                    width: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) =>
-                    const Text("サムネイル読み込み失敗"),
-                  ),
-                  Positioned(
-                    left: 8,
-                    child: IconButton(
-                      icon: const Icon(Icons.skip_previous, size: 36, color: Colors.white),
-                      onPressed: _playPrevious,
-                    ),
-                  ),
-                  Positioned(
-                    right: 8,
-                    child: IconButton(
-                      icon: const Icon(Icons.skip_next, size: 36, color: Colors.white),
-                      onPressed: _playNext,
-                    ),
-                  ),
-                  Positioned(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.replay_10, color: Colors.white, size: 32),
-                          onPressed: () => _seekBy(const Duration(seconds: -10)),
-                        ),
-                        const SizedBox(width: 12),
-                        IconButton(
-                          icon: Icon(
-                            _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                            size: 48,
-                            color: Colors.white,
-                          ),
-                          onPressed: _togglePlayPause,
-                        ),
-                        const SizedBox(width: 12),
-                        IconButton(
-                          icon: const Icon(Icons.forward_10, color: Colors.white, size: 32),
-                          onPressed: () => _seekBy(const Duration(seconds: 10)),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-            const SizedBox(height: 8),
+            // --- プレイヤーUI ---
             if (_videoTitle != null)
-              Text("🎵 $_videoTitle", style: const TextStyle(fontWeight: FontWeight.bold)),
-            Slider(
-              min: 0,
-              max: _duration.inSeconds.toDouble(),
-              value: _position.inSeconds.clamp(0, _duration.inSeconds).toDouble(),
-              onChanged: (value) async {
-                final newPosition = Duration(seconds: value.toInt());
-                await _audioPlayer.seek(newPosition);
-              },
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(_formatDuration(_position)),
-                Text(_formatDuration(_duration)),
-              ],
-            ),
-            if (_thumbnailUrl == null)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+              _buildPlayerControls(),
+
+            const Divider(),
+
+            // --- プレイリスト ---
+            // ★ 10. Expandedでラップして、残りのスペースでスクロール可能にする
+            Expanded(
+              child: Column(
                 children: [
-                  IconButton(
-                    icon: const Icon(Icons.skip_previous, size: 36),
-                    onPressed: _playPrevious,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.replay_10),
-                    onPressed: () => _seekBy(const Duration(seconds: -10)),
-                  ),
-                  IconButton(
-                    icon: Icon(
-                      _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-                      size: 48,
+                  if (_playlist.isNotEmpty)
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: _playlist.length,
+                        itemBuilder: (context, index) {
+                          final item = _playlist[index];
+                          final isPlaying = index == _currentIndex && _isPlaying;
+                          return Card( // ListTileをCardで囲んで見やすく
+                            color: isPlaying ? Colors.blue.withOpacity(0.1) : null,
+                            child: ListTile(
+                              leading: item.thumbnailUrl != null
+                                  ? Image.network(item.thumbnailUrl!, width: 60, fit: BoxFit.cover,
+                                  errorBuilder: (c, e, s) => const Icon(Icons.music_note, size: 40))
+                                  : const Icon(Icons.music_note, size: 40),
+                              title: Text(item.title, maxLines: 2, overflow: TextOverflow.ellipsis),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 8.0),
+                                child: _buildDownloadButton(index),
+                              ),
+                              onTap: () => _playFromPlaylist(index),
+                              trailing: IconButton(
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () => _deletePlaylistItem(index),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                     ),
-                    onPressed: _togglePlayPause,
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.forward_10),
-                    onPressed: () => _seekBy(const Duration(seconds: 10)),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.skip_next, size: 36),
-                    onPressed: _playNext,
-                  ),
+                  const BannerAdWidget(),
                 ],
               ),
-
-            const Divider(height: 20),
-
-            if (_playlist.isNotEmpty)
-              ExpansionTile(
-                title: const Text("🎵 プレイリスト"),
-                initiallyExpanded: _isPlaylistExpanded,
-                onExpansionChanged: (expanded) {
-                  setState(() => _isPlaylistExpanded = expanded);
-                },
-                children: [
-                  SizedBox(
-                    height: 200, // 高さを必要に応じて調整
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: _playlist.length,
-                      itemBuilder: (context, index) {
-                        final item = _playlist[index];
-                        return ListTile(
-                          leading: Image.network(item['thumbnailUrl'] ?? "", width: 60),
-                          title: Row(
-                            children: [
-                              Expanded(child: Text(item['title'] ?? '')),
-                              _buildDownloadButton(index),
-                            ],
-                          ),
-                          onTap: () => _playFromPlaylist(index),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete),
-                            onPressed: () {
-                              setState(() => _playlist.removeAt(index));
-                            },
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            const BannerAdWidget(),//バナー広告
+            ),
           ],
         ),
       ),
+    );
+  }
+
+  // 検索と追加のロジックを共通化
+  void _searchAndAddSong() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) return;
+    FocusScope.of(context).unfocus(); // キーボードを閉じる
+
+    try {
+      final video = await _yt.videos.get(VideoId(url));
+      final newItem = PlaylistItem(
+        title: video.title,
+        url: url,
+        thumbnailUrl: video.thumbnails.mediumResUrl,
+      );
+      setState(() {
+        _playlist.add(newItem);
+        // プレイリストの最初の曲なら自動再生
+        if (_playlist.length == 1 && !_isPlaying) {
+          _playFromPlaylist(0);
+        }
+      });
+      _urlController.clear();
+    } catch (e) {
+      print('検索エラー: $e');
+      if(context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("動画情報の取得に失敗しました。"))
+        );
+      }
+    }
+  }
+
+  // プレイヤーUIを別Widgetに切り出し
+  Widget _buildPlayerControls() {
+    return Column(
+      children: [
+        if (_thumbnailUrl != null)
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              Image.network(
+                _thumbnailUrl!, height: 200, width: double.infinity, fit: BoxFit.cover,
+                errorBuilder: (c, e, s) => const SizedBox(height: 200, child: Center(child: Text("サムネイル読み込み失敗"))),
+              ),
+              Container(color: Colors.black38, height: 200),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  IconButton(icon: const Icon(Icons.skip_previous, size: 36, color: Colors.white), onPressed: _playPrevious),
+                  IconButton(icon: const Icon(Icons.replay_10, color: Colors.white, size: 32), onPressed: () => _seekBy(const Duration(seconds: -10))),
+                  IconButton(icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled, size: 48, color: Colors.white), onPressed: _togglePlayPause),
+                  IconButton(icon: const Icon(Icons.forward_10, color: Colors.white, size: 32), onPressed: () => _seekBy(const Duration(seconds: 10))),
+                  IconButton(icon: const Icon(Icons.skip_next, size: 36, color: Colors.white), onPressed: _playNext),
+                ],
+              ),
+            ],
+          ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+          child: Text("🎵 $_videoTitle", style: const TextStyle(fontWeight: FontWeight.bold), textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis),
+        ),
+        Slider(
+          min: 0, max: _duration.inSeconds.toDouble(),
+          value: _position.inSeconds.clamp(0, _duration.inSeconds).toDouble(),
+          onChanged: (value) async {
+            await _audioPlayer.seek(Duration(seconds: value.toInt()));
+          },
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [ Text(_formatDuration(_position)), Text(_formatDuration(_duration)), ],
+          ),
+        ),
+      ],
     );
   }
 }
